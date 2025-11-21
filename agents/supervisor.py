@@ -11,7 +11,7 @@ from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from core.state import AgentState
 from config import DEFAULT_MODEL, LLM_TEMPERATURE, VALID_AGENTS
 
@@ -31,6 +31,30 @@ class RouteResponse(BaseModel):
     reasoning: str = Field(
         description="Brief explanation for the routing decision"
     )
+    
+    @field_validator("next")
+    @classmethod
+    def normalize_agent_name(cls, v):
+        """Normalize agent names to handle variations."""
+        v = v.strip()
+        mapping = {
+            "data_analyst": "Data_Analyst",
+            "data analyst": "Data_Analyst",
+            "analyst": "Data_Analyst",
+            "business_strategist": "Business_Strategist",
+            "business strategist": "Business_Strategist",
+            "strategist": "Business_Strategist",
+            "visualizer": "Business_Strategist",  # Legacy support
+            "finish": "FINISH",
+            "end": "FINISH",
+            "done": "FINISH",
+            "complete": "FINISH",
+        }
+        normalized = mapping.get(v.lower(), v)
+        # If still not valid, default to FINISH
+        if normalized not in VALID_AGENTS:
+            return "FINISH"
+        return normalized
 
 
 class SupervisorAgent:

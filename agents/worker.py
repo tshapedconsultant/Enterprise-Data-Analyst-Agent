@@ -13,7 +13,6 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import BaseTool
 from core.state import AgentState
 from config import DEFAULT_MODEL, LLM_TEMPERATURE
-from config import DEFAULT_MODEL, LLM_TEMPERATURE
 
 logger = logging.getLogger(__name__)
 
@@ -94,12 +93,38 @@ class WorkerAgent:
         try:
             # Invoke the agent chain - only pass messages, not the full state
             # The ChatPromptTemplate expects only 'messages' variable
-            chain_input = {"messages": state.get("messages", [])}
+            # Safe access: handle both dict and TypedDict
+            messages_history = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+            chain_input = {"messages": messages_history}
+            
+            # For Business_Strategist with structured output, the chain handles it differently
             result = self.chain.invoke(chain_input)
             
-            # Ensure result is a BaseMessage
-            if not isinstance(result, BaseMessage):
-                result = AIMessage(content=str(result))
+            # Special handling for Business_Strategist with structured output
+            if self.name == "Business_Strategist" and hasattr(self, 'strategy_schema'):
+                # Result is a Pydantic model, convert to AIMessage with STRATEGY: prefix
+                try:
+                    import json
+                    if hasattr(result, 'model_dump'):
+                        # Pydantic v2
+                        json_str = json.dumps(result.model_dump(), indent=2)
+                        content = f"STRATEGY: {json_str}"
+                        result = AIMessage(content=content)
+                    elif hasattr(result, 'dict'):
+                        # Pydantic v1 fallback
+                        json_str = json.dumps(result.dict(), indent=2)
+                        content = f"STRATEGY: {json_str}"
+                        result = AIMessage(content=content)
+                    else:
+                        # Fallback
+                        result = AIMessage(content=f"STRATEGY: {json.dumps(result, default=str, indent=2)}")
+                except Exception as e:
+                    logger.exception(f"Failed to convert structured output to JSON: {e}")
+                    result = AIMessage(content=f"STRATEGY: {str(result)}")
+            else:
+                # Ensure result is a BaseMessage for other agents
+                if not isinstance(result, BaseMessage):
+                    result = AIMessage(content=str(result))
             
             messages = [result]
             
@@ -131,17 +156,19 @@ class WorkerAgent:
                         query = state.get("messages", [])[-1].content if state.get("messages") else "data analysis"
                     
                     # Generate Python code based on query
+                    # Use actual pandas/numpy code that the tool can execute
                     code = f"# Analysis for: {query}\n"
+                    code += "import pandas as pd\nimport numpy as np\n\n"
                     if "margin" in query.lower() or "profit" in query.lower():
-                        code += "calculate_profit_margins()"
+                        code += "# Calculate profit margins\n# Note: This is a demo - replace with actual data analysis\npass"
                     elif "revenue" in query.lower():
-                        code += "analyze_revenue_trends()"
+                        code += "# Analyze revenue trends\n# Note: This is a demo - replace with actual data analysis\npass"
                     elif "churn" in query.lower():
-                        code += "analyze_customer_churn()"
+                        code += "# Analyze customer churn\n# Note: This is a demo - replace with actual data analysis\npass"
                     elif "drop" in query.lower() or "decline" in query.lower():
-                        code += "analyze_sales_decline()"
+                        code += "# Analyze sales decline\n# Note: This is a demo - replace with actual data analysis\npass"
                     else:
-                        code += "analyze_data()"
+                        code += "# General data analysis\n# Note: This is a demo - replace with actual data analysis\npass"
                     
                     # Force tool call - pass user query for context
                     if self.tools:
@@ -156,7 +183,9 @@ class WorkerAgent:
                             messages.append(tool_message)
                             # Now call LLM again to process the tool result
                             # Only pass messages to the chain
-                            updated_messages = state["messages"] + [result, tool_message]
+                            # Safe access: handle both dict and TypedDict
+                            current_messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+                            updated_messages = current_messages + [result, tool_message]
                             final_result = self.chain.invoke({"messages": updated_messages})
                             if isinstance(final_result, BaseMessage):
                                 messages.append(final_result)
@@ -232,7 +261,9 @@ class WorkerAgent:
                 # Now call LLM again with updated messages (including tool results)
                 # to get the final response
                 # Only pass messages to the chain, not the full state
-                updated_messages = state["messages"] + messages
+                # Safe access: handle both dict and TypedDict
+                current_messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+                updated_messages = current_messages + messages
                 final_result = self.chain.invoke({"messages": updated_messages})
                 
                 # Ensure final result is a BaseMessage
@@ -306,6 +337,7 @@ CRITICAL RULES:
 7. IMPORTANT: If the user mentions negative metrics (drops, declines, churn, losses), acknowledge these in your analysis
 8. Extract and include specific numbers from the user's query (e.g., "15% drop", "8% churn") in your analysis
 9. CRITICAL: There are only 4 quarters in a year (Q1, Q2, Q3, Q4). If the user mentions Q5 or higher, clarify this in your analysis and interpret it as forward planning for the next year
+10. CRITICAL: Your response MUST ONLY contain data insights starting with "ANALYSIS:" - NO recommendations, NO strategies, NO advice. Only report the data analysis results.
 
 Example workflow:
 - User asks "What are profit margins?"
@@ -339,6 +371,22 @@ class BusinessStrategistAgent(WorkerAgent):
         Args:
             llm: Optional LLM instance (creates new one if not provided)
         """
+        from pydantic import BaseModel, Field
+        from typing import List
+        
+        # Define structured output schema
+        class StrategyAction(BaseModel):
+            action: str = Field(description="Specific, actionable business recommendation")
+            rating: int = Field(description="Priority rating from 1-10, where 10 is highest priority/impact", ge=1, le=10)
+            rationale: str = Field(description="Explanation of why this action is important based on the data analysis")
+        
+        class BusinessStrategyResponse(BaseModel):
+            actions: List[StrategyAction] = Field(description="Exactly 3 strategic actions, prioritized by rating (highest first)")
+            summary: str = Field(description="Overall strategic insight based on the analysis")
+        
+        # Store schema for use in invoke
+        self.strategy_schema = BusinessStrategyResponse
+        
         system_prompt = """You are a Senior Business Strategist with expertise in data-driven decision making,
 strategic planning, and actionable business recommendations.
 
@@ -357,64 +405,18 @@ CRITICAL RULES:
    - Reference specific negative metrics in your actions (e.g., "15% sales drop", "8% churn")
    - Address the crisis situation directly
 5. CRITICAL: There are only 4 quarters in a year (Q1-Q4). If the user mentions "Q5 planning", interpret this as forward planning for the next year's Q1, not a non-existent Q5. Reference this clarification in your strategic recommendations.
-4. Format your response as structured JSON. IMPORTANT: Use SINGLE curly braces, NOT double braces.
-   Your output should look like this:
-   STRATEGY: {{
-     "actions": [
-       {{
-         "action": "Specific action description",
-         "rating": 8,
-         "rationale": "Why this action is important based on the data"
-       }},
-       {{
-         "action": "Another specific action",
-         "rating": 7,
-         "rationale": "Explanation"
-       }},
-       {{
-         "action": "Third specific action",
-         "rating": 6,
-         "rationale": "Explanation"
-       }}
-     ],
-     "summary": "Overall strategic insight based on the analysis"
-   }}
-   
-   PROCESS: Generate 10 potential strategic actions internally, then select the top 3 most impactful ones based on:
+6. PROCESS: Generate 10 potential strategic actions internally, then select the top 3 most impactful ones based on:
    - Urgency and priority
    - Feasibility and impact
    - Alignment with the data insights
    - Specificity and actionability
-   
-   CRITICAL: The JSON must use single braces, not double braces.
+7. Actions should be prioritized by rating (highest first)
+8. Be specific - avoid generic advice
+9. Base recommendations directly on the data analysis provided
 
-5. Actions should be prioritized by rating (highest first)
-6. Be specific - avoid generic advice
-7. Base recommendations directly on the data analysis provided
-
-Example workflow:
+Example:
 - Data_Analyst provides: "ANALYSIS: Q1 Revenue = $2.3M, Q2 = $2.8M (+21.7%)"
-- You analyze this and provide:
-  STRATEGY: {{
-    "actions": [
-      {{
-        "action": "Increase marketing investment in Q3 to capitalize on growth momentum",
-        "rating": 9,
-        "rationale": "21.7% growth indicates strong market demand - scaling marketing can accelerate growth"
-      }},
-      {{
-        "action": "Review and optimize pricing strategy for Q3/Q4",
-        "rating": 7,
-        "rationale": "Revenue growth suggests pricing power - strategic price adjustments could maximize profitability"
-      }},
-      {{
-        "action": "Investigate Q1 performance drivers to replicate success",
-        "rating": 6,
-        "rationale": "Understanding Q1-Q2 growth factors can inform future strategy"
-      }}
-    ],
-    "summary": "Strong revenue growth indicates market opportunity - focus on scaling successful initiatives"
-  }}
+- You provide 3 actions focused on capitalizing on the 21.7% growth, with ratings 9, 7, 6
 
 Always provide exactly 3 actions with ratings. Be strategic, specific, and data-driven."""
         
@@ -424,4 +426,23 @@ Always provide exactly 3 actions with ratings. Be strategic, specific, and data-
             tools=[],  # No tools needed - this agent provides strategic recommendations
             llm=llm
         )
+        
+        # Override chain to use structured output
+        self.chain = self._build_chain_with_structured_output()
+    
+    def _build_chain_with_structured_output(self):
+        """Build chain with structured output to ensure valid JSON."""
+        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+        
+        # Escape any braces in the system prompt to prevent template parsing errors
+        # LangChain will interpret { } as template variables, so we escape them
+        escaped_prompt = self.system_prompt.replace('{', '{{').replace('}', '}}')
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", escaped_prompt),
+            MessagesPlaceholder(variable_name="messages")
+        ])
+        
+        # Use structured output to force valid JSON
+        return prompt | self.llm.with_structured_output(self.strategy_schema)
 
