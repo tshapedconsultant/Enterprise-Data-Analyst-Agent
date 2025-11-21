@@ -5,8 +5,7 @@
 ![LangGraph](https://img.shields.io/badge/Agentic_AI-LangGraph-orange.svg)
 ![OpenAI](https://img.shields.io/badge/LLM-GPT--4-purple.svg)
 
-> **🎓 DeepLearning.AI - Advanced AI Course Project**  
-> **Focus: Agentic AI and Multi-Agent Systems**
+> 
 
 **This system turns natural language business questions into automated multi-step AI workflows using specialized agents that collaborate autonomously.**
 
@@ -170,27 +169,74 @@ curl -X POST http://127.0.0.1:8000/run \
 ## 📁 Project Structure
 
 ```
-.
-├── agents/              # Agent implementations
-│   ├── supervisor.py   # Supervisor routing agent
-│   └── worker.py       # Worker agent base classes
-├── api/                # FastAPI application
-│   └── routes.py       # API endpoints
-├── config/             # Configuration management
-│   └── settings.py     # Application settings
-├── core/               # Core state management
-│   └── state.py        # State schemas and utilities
-├── tools/              # Analysis tools and security
-│   ├── analysis_tools.py
-│   └── security.py
-├── workflow/           # Workflow orchestration
-│   └── team.py         # Multi-agent team implementation
-├── static/             # Web interface
-│   ├── index.html
-│   ├── app.js
-│   └── style.css
-└── main.py             # Application entry point
+enterprise-data-analyst-agent/
+├── agents/                    # Agent implementations
+│   ├── __init__.py           # Agent exports
+│   ├── supervisor.py         # Supervisor routing agent (orchestrates workflow)
+│   └── worker.py             # Worker agent base classes (Data_Analyst, Business_Strategist)
+│
+├── api/                       # FastAPI application
+│   ├── __init__.py
+│   └── routes.py             # API endpoints (/run, /health, /)
+│
+├── config/                    # Configuration management
+│   ├── __init__.py
+│   └── settings.py           # Application settings (LLM config, API settings)
+│
+├── core/                      # Core state management
+│   ├── __init__.py
+│   └── state.py              # AgentState TypedDict and state utilities
+│
+├── tools/                     # Analysis tools and security
+│   ├── __init__.py
+│   ├── analysis_tools.py     # execute_python_analysis tool (with Excel support)
+│   └── security.py           # Code safety validation (AST parsing)
+│
+├── utils/                     # Utility functions
+│   ├── __init__.py
+│   ├── logging_config.py    # Logging setup
+│   └── query_validator.py    # Query validation (absurd/ambiguous detection)
+│
+├── workflow/                  # Workflow orchestration
+│   ├── __init__.py
+│   └── team.py               # EnterpriseDataTeam (LangGraph workflow)
+│
+├── examples/                  # Example files and mock data
+│   ├── __init__.py
+│   ├── example_usage.py      # Usage examples
+│   └── mock_business_data.xlsx  # Mock Excel data (5 sheets: Revenue, Sales, ROI, etc.)
+│
+├── tests/                     # Test suite
+│   ├── __init__.py
+│   ├── conftest.py           # Pytest fixtures
+│   ├── test_agents.py        # Agent unit tests
+│   ├── test_api.py           # API integration tests
+│   ├── test_workflow.py      # Workflow integration tests
+│   ├── test_state.py         # State management tests
+│   ├── test_analysis_tools.py # Tool tests
+│   └── test_security.py      # Security validation tests
+│
+├── static/                    # Web interface (minimalist UI)
+│   ├── index.html            # Main HTML interface
+│   ├── app.js                # Frontend JavaScript (streaming, strategy rendering)
+│   └── style.css             # Minimalist styling
+│
+├── main.py                    # Application entry point
+├── requirements.txt           # Python dependencies
+├── IMPROVEMENTS.md           # V2 roadmap and enhancements
+├── LICENSE                    # License file
+└── README.md                 # This file
 ```
+
+### Key Components Explained
+
+- **`agents/`**: Implements the three-agent system (Supervisor, Data_Analyst, Business_Strategist)
+- **`workflow/team.py`**: LangGraph orchestration - manages agent routing and state transitions
+- **`tools/analysis_tools.py`**: Core analysis tool with Excel data integration (pandas-based)
+- **`core/state.py`**: TypedDict-based state management for LangGraph workflows
+- **`utils/query_validator.py`**: Prevents absurd queries and detects ambiguous inputs
+- **`examples/mock_business_data.xlsx`**: Mock business data with 5 sheets (Quarterly Revenue, Monthly Sales, ROI Analysis, Regional Performance, Summary)
+- **`static/`**: Minimalist web interface with real-time streaming and strategy visualization
 
 ---
 
