@@ -6,6 +6,7 @@ like data analysis and strategic recommendations.
 """
 
 import logging
+import uuid
 from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, AIMessage, ToolMessage
@@ -135,64 +136,84 @@ class WorkerAgent:
             if self.name == "Data_Analyst" and not has_tool_calls:
                 logger.info(f"{self.name} didn't call tool, forcing tool usage")
                 
-                if self.name == "Data_Analyst":
-                    # Data_Analyst must use the tool - extract query and force tool call
-                    # Get the original user query or last message
-                    query = ""
-                    for msg in reversed(state.get("messages", [])):
-                        if hasattr(msg, 'content'):
-                            content = msg.content
-                            # Get the first human message (original query)
-                            if hasattr(msg, 'type') and msg.type == 'human':
-                                query = content
-                                break
-                            # Or use any message that looks like a query
-                            if not query and len(content) < 500:  # Reasonable query length
-                                query = content
-                                break
-                    
-                    if not query:
-                        # Fallback: use the last message content
-                        query = state.get("messages", [])[-1].content if state.get("messages") else "data analysis"
-                    
-                    # Generate Python code based on query
-                    # Use actual pandas/numpy code that the tool can execute
-                    code = f"# Analysis for: {query}\n"
-                    code += "import pandas as pd\nimport numpy as np\n\n"
-                    if "margin" in query.lower() or "profit" in query.lower():
-                        code += "# Calculate profit margins\n# Note: This is a demo - replace with actual data analysis\npass"
-                    elif "revenue" in query.lower():
-                        code += "# Analyze revenue trends\n# Note: This is a demo - replace with actual data analysis\npass"
-                    elif "churn" in query.lower():
-                        code += "# Analyze customer churn\n# Note: This is a demo - replace with actual data analysis\npass"
-                    elif "drop" in query.lower() or "decline" in query.lower():
-                        code += "# Analyze sales decline\n# Note: This is a demo - replace with actual data analysis\npass"
-                    else:
-                        code += "# General data analysis\n# Note: This is a demo - replace with actual data analysis\npass"
-                    
-                    # Force tool call - pass user query for context
-                    if self.tools:
-                        tool = self.tools[0]  # execute_python_analysis
-                        try:
-                            tool_result = tool.invoke({"code": code, "user_query": query})
-                            # Create a synthetic tool call response
-                            tool_message = ToolMessage(
-                                content=str(tool_result),
-                                tool_call_id="forced_call"
-                            )
-                            messages.append(tool_message)
-                            # Now call LLM again to process the tool result
-                            # Only pass messages to the chain
-                            # Safe access: handle both dict and TypedDict
-                            current_messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
-                            updated_messages = current_messages + [result, tool_message]
-                            final_result = self.chain.invoke({"messages": updated_messages})
-                            if isinstance(final_result, BaseMessage):
-                                messages.append(final_result)
-                            return messages
-                        except Exception as e:
-                            logger.exception("Forced tool call failed")
-                            return [AIMessage(content=f"ERROR: Failed to execute analysis: {str(e)}")]
+                # Data_Analyst must use the tool - extract query and force tool call
+                # Get the original user query or last message
+                query = ""
+                for msg in reversed(state.get("messages", [])):
+                    if hasattr(msg, 'content'):
+                        content = msg.content
+                        # Get the first human message (original query)
+                        if hasattr(msg, 'type') and msg.type == 'human':
+                            query = content
+                            break
+                        # Or use any message that looks like a query
+                        if not query and len(content) < 500:  # Reasonable query length
+                            query = content
+                            break
+                
+                if not query:
+                    # Fallback: use the last message content
+                    query = state.get("messages", [])[-1].content if state.get("messages") else "data analysis"
+                
+                # Generate Python code based on query
+                # Use actual pandas/numpy code that the tool can execute
+                code = f"# Analysis for: {query}\n"
+                code += "import pandas as pd\nimport numpy as np\n\n"
+                if "margin" in query.lower() or "profit" in query.lower():
+                    code += "# Calculate profit margins\n# Note: This is a demo - replace with actual data analysis\npass"
+                elif "revenue" in query.lower():
+                    code += "# Analyze revenue trends\n# Note: This is a demo - replace with actual data analysis\npass"
+                elif "churn" in query.lower():
+                    code += "# Analyze customer churn\n# Note: This is a demo - replace with actual data analysis\npass"
+                elif "drop" in query.lower() or "decline" in query.lower():
+                    code += "# Analyze sales decline\n# Note: This is a demo - replace with actual data analysis\npass"
+                else:
+                    code += "# General data analysis\n# Note: This is a demo - replace with actual data analysis\npass"
+                
+                # Force tool call - pass user query for context
+                if self.tools:
+                    tool = self.tools[0]  # execute_python_analysis
+                    try:
+                        tool_result = tool.invoke({"code": code, "user_query": query})
+                        
+                        # Create a synthetic AIMessage with tool_calls to match the ToolMessage
+                        # This is required by OpenAI API: ToolMessage must follow an AIMessage with tool_calls
+                        tool_call_id = f"forced_call_{uuid.uuid4().hex[:8]}"
+                        
+                        # Create AIMessage with tool_calls
+                        synthetic_ai_message = AIMessage(
+                            content="",
+                            tool_calls=[{
+                                "name": tool.name,
+                                "args": {"code": code, "user_query": query},
+                                "id": tool_call_id
+                            }]
+                        )
+                        
+                        # Create ToolMessage that responds to the synthetic AIMessage
+                        tool_message = ToolMessage(
+                            content=str(tool_result),
+                            tool_call_id=tool_call_id
+                        )
+                        
+                        # Build message sequence: original result + synthetic AIMessage + ToolMessage
+                        # The synthetic AIMessage replaces the original result for tool call purposes
+                        messages = [synthetic_ai_message, tool_message]
+                        
+                        # Now call LLM again to process the tool result
+                        # Only pass messages to the chain
+                        # Safe access: handle both dict and TypedDict
+                        current_messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+                        # Include the original result message, then synthetic tool call sequence
+                        updated_messages = current_messages + [result] + messages
+                        final_result = self.chain.invoke({"messages": updated_messages})
+                        
+                        if isinstance(final_result, BaseMessage):
+                            messages.append(final_result)
+                        return messages
+                    except Exception as e:
+                        logger.exception("Forced tool call failed")
+                        return [AIMessage(content=f"ERROR: Failed to execute analysis: {str(e)}")]
             
             # Check if the agent wants to use tools (normal flow)
             if has_tool_calls:
