@@ -8,11 +8,57 @@ connect to actual data sources and execution environments.
 
 import json
 import logging
-from typing import Any
+import os
+from typing import Any, Optional
+from pathlib import Path
 from langchain_core.tools import tool
 from tools.security import is_code_safe
 
+# Try to import pandas (optional dependency for Excel support)
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    pd = None
+
 logger = logging.getLogger(__name__)
+
+# Path to mock Excel file
+MOCK_EXCEL_PATH = Path(__file__).parent.parent / "examples" / "mock_business_data.xlsx"
+
+
+def _load_excel_data() -> Optional[dict]:
+    """
+    Load data from mock Excel file if available.
+    
+    Returns:
+        Dictionary with sheet names as keys and DataFrames as values, or None if file doesn't exist
+    """
+    try:
+        if not PANDAS_AVAILABLE:
+            logger.debug("pandas not available, cannot load Excel file")
+            return None
+        
+        if not MOCK_EXCEL_PATH.exists():
+            logger.debug(f"Mock Excel file not found at {MOCK_EXCEL_PATH}")
+            return None
+        
+        # Load all sheets
+        excel_data = {}
+        with pd.ExcelFile(MOCK_EXCEL_PATH) as xls:
+            for sheet_name in xls.sheet_names:
+                excel_data[sheet_name] = pd.read_excel(xls, sheet_name=sheet_name)
+        
+        logger.info(f"Loaded Excel data with {len(excel_data)} sheets: {list(excel_data.keys())}")
+        return excel_data
+    
+    except ImportError:
+        logger.warning("pandas or openpyxl not available, falling back to mock data")
+        return None
+    except Exception as e:
+        logger.warning(f"Error loading Excel file: {e}, falling back to mock data")
+        return None
 
 
 @tool
@@ -42,7 +88,10 @@ def execute_python_analysis(code: str, user_query: str = "") -> str:
         return "ERROR: Security violation detected. Execution blocked."
     
     try:
-        # Mock execution logic - replace with actual sandboxed execution in production
+        # Try to load Excel data first (if available)
+        excel_data = _load_excel_data()
+        use_excel = excel_data is not None
+        
         code_lower = code.lower()
         query_lower = user_query.lower() if user_query else ""
         combined_context = f"{code_lower} {query_lower}"
@@ -99,60 +148,136 @@ def execute_python_analysis(code: str, user_query: str = "") -> str:
             return f"{summary} | DATA: {json.dumps(structured_data)}"
         
         if "margin" in code_lower:
-            summary = "ANALYSIS: Avg Margin = 24.5%, Top Region = North America (32.1%)."
-            structured_data = {
-                "labels": ["Average Margin", "Top Region"],
-                "values": [24.5, 32.1],
-                "units": ["%", "%"],
-                "type": "margin"
-            }
+            if use_excel and "Regional Performance" in excel_data:
+                # Use real data from Excel
+                df_regional = excel_data["Regional Performance"]
+                avg_margin = df_regional["Profit Margin (%)"].mean()
+                top_region_row = df_regional.loc[df_regional["Profit Margin (%)"].idxmax()]
+                top_region = top_region_row["Region"]
+                top_margin = top_region_row["Profit Margin (%)"]
+                
+                summary = f"ANALYSIS: Avg Margin = {avg_margin:.1f}%, Top Region = {top_region} ({top_margin:.1f}%)."
+                structured_data = {
+                    "labels": ["Average Margin", "Top Region"],
+                    "values": [round(avg_margin, 1), round(top_margin, 1)],
+                    "units": ["%", "%"],
+                    "type": "margin"
+                }
+            else:
+                # Fallback to mock data
+                summary = "ANALYSIS: Avg Margin = 24.5%, Top Region = North America (32.1%)."
+                structured_data = {
+                    "labels": ["Average Margin", "Top Region"],
+                    "values": [24.5, 32.1],
+                    "units": ["%", "%"],
+                    "type": "margin"
+                }
             return f"{summary} | DATA: {json.dumps(structured_data)}"
         
         if "revenue" in code_lower or ("quarter" in combined_context and "revenue" in combined_context):
             # Handle multi-quarter analysis requests
-            if "4 quarters" in query_lower or "past 4" in query_lower or "q1" in query_lower and "q4" in query_lower:
+            if "4 quarters" in query_lower or "past 4" in query_lower or ("q1" in query_lower and "q4" in query_lower):
                 # Multi-quarter analysis
-                if has_invalid_quarter:
-                    # User mentioned Q5 or invalid quarter - clarify and provide Q1-Q4 analysis
-                    summary = "ANALYSIS: Note: There are only 4 quarters in a year (Q1-Q4). Interpreting 'Q5 planning' as forward planning for next year. "
-                    summary += "Q1 Revenue = $120M, Q2 = $135M, Q3 = $150M (best), Q4 = $145M. "
-                    summary += "YoY Growth: Q1 (N/A), Q2 (+12.5%), Q3 (+11.1%), Q4 (-3.3%). "
-                    summary += "Best Quarter: Q3 ($150M). Worst Quarter: Q1 ($120M). "
-                    summary += "For forward planning, focus on replicating Q3 success and addressing Q1 challenges."
+                if use_excel and "Quarterly Revenue" in excel_data:
+                    # Use real data from Excel
+                    df_quarters = excel_data["Quarterly Revenue"]
+                    q1_rev = df_quarters.loc[df_quarters["Quarter"] == "Q1", "Revenue (M)"].values[0]
+                    q2_rev = df_quarters.loc[df_quarters["Quarter"] == "Q2", "Revenue (M)"].values[0]
+                    q3_rev = df_quarters.loc[df_quarters["Quarter"] == "Q3", "Revenue (M)"].values[0]
+                    q4_rev = df_quarters.loc[df_quarters["Quarter"] == "Q4", "Revenue (M)"].values[0]
+                    
+                    revenues = [q1_rev, q2_rev, q3_rev, q4_rev]
+                    best_idx = revenues.index(max(revenues))
+                    worst_idx = revenues.index(min(revenues))
+                    best_q = df_quarters.iloc[best_idx]["Quarter"]
+                    worst_q = df_quarters.iloc[worst_idx]["Quarter"]
+                    
+                    yoy_growth = []
+                    for idx, row in df_quarters.iterrows():
+                        growth = row["YoY Growth (%)"]
+                        yoy_growth.append(growth if pd.notna(growth) else None)
+                    
+                    if has_invalid_quarter:
+                        summary = "ANALYSIS: Note: There are only 4 quarters in a year (Q1-Q4). Interpreting 'Q5 planning' as forward planning for next year. "
+                    else:
+                        summary = "ANALYSIS: "
+                    
+                    summary += f"Q1 Revenue = ${q1_rev}M, Q2 = ${q2_rev}M, Q3 = ${q3_rev}M (best), Q4 = ${q4_rev}M. "
+                    summary += f"YoY Growth: Q1 ({yoy_growth[0] if yoy_growth[0] is not None else 'N/A'}), "
+                    summary += f"Q2 ({'+' if yoy_growth[1] and yoy_growth[1] > 0 else ''}{yoy_growth[1] if yoy_growth[1] is not None else 'N/A'}%), "
+                    summary += f"Q3 ({'+' if yoy_growth[2] and yoy_growth[2] > 0 else ''}{yoy_growth[2] if yoy_growth[2] is not None else 'N/A'}%), "
+                    summary += f"Q4 ({'+' if yoy_growth[3] and yoy_growth[3] > 0 else ''}{yoy_growth[3] if yoy_growth[3] is not None else 'N/A'}%). "
+                    summary += f"Best Quarter: {best_q} (${max(revenues)}M). Worst Quarter: {worst_q} (${min(revenues)}M)."
+                    
+                    if has_invalid_quarter:
+                        summary += " For forward planning, focus on replicating Q3 success and addressing Q1 challenges."
+                    
                     structured_data = {
                         "labels": ["Q1", "Q2", "Q3", "Q4"],
-                        "values": [120, 135, 150, 145],
+                        "values": [float(q1_rev), float(q2_rev), float(q3_rev), float(q4_rev)],
                         "units": ["M", "M", "M", "M"],
                         "type": "revenue",
-                        "best_quarter": "Q3",
-                        "worst_quarter": "Q1",
-                        "yoy_growth": [None, 12.5, 11.1, -3.3],
-                        "note": "Q5 does not exist - interpreted as forward planning"
+                        "best_quarter": best_q,
+                        "worst_quarter": worst_q,
+                        "yoy_growth": yoy_growth
                     }
+                    if has_invalid_quarter:
+                        structured_data["note"] = "Q5 does not exist - interpreted as forward planning"
                 else:
-                    # Standard 4-quarter analysis
-                    summary = "ANALYSIS: Q1 Revenue = $120M, Q2 = $135M, Q3 = $150M (best), Q4 = $145M. "
-                    summary += "YoY Growth: Q1 (N/A), Q2 (+12.5%), Q3 (+11.1%), Q4 (-3.3%). "
-                    summary += "Best Quarter: Q3 ($150M). Worst Quarter: Q1 ($120M)."
-                    structured_data = {
-                        "labels": ["Q1", "Q2", "Q3", "Q4"],
-                        "values": [120, 135, 150, 145],
-                        "units": ["M", "M", "M", "M"],
-                        "type": "revenue",
-                        "best_quarter": "Q3",
-                        "worst_quarter": "Q1",
-                        "yoy_growth": [None, 12.5, 11.1, -3.3]
-                    }
+                    # Fallback to mock data
+                    if has_invalid_quarter:
+                        summary = "ANALYSIS: Note: There are only 4 quarters in a year (Q1-Q4). Interpreting 'Q5 planning' as forward planning for next year. "
+                        summary += "Q1 Revenue = $120M, Q2 = $135M, Q3 = $150M (best), Q4 = $145M. "
+                        summary += "YoY Growth: Q1 (N/A), Q2 (+12.5%), Q3 (+11.1%), Q4 (-3.3%). "
+                        summary += "Best Quarter: Q3 ($150M). Worst Quarter: Q1 ($120M). "
+                        summary += "For forward planning, focus on replicating Q3 success and addressing Q1 challenges."
+                        structured_data = {
+                            "labels": ["Q1", "Q2", "Q3", "Q4"],
+                            "values": [120, 135, 150, 145],
+                            "units": ["M", "M", "M", "M"],
+                            "type": "revenue",
+                            "best_quarter": "Q3",
+                            "worst_quarter": "Q1",
+                            "yoy_growth": [None, 12.5, 11.1, -3.3],
+                            "note": "Q5 does not exist - interpreted as forward planning"
+                        }
+                    else:
+                        summary = "ANALYSIS: Q1 Revenue = $120M, Q2 = $135M, Q3 = $150M (best), Q4 = $145M. "
+                        summary += "YoY Growth: Q1 (N/A), Q2 (+12.5%), Q3 (+11.1%), Q4 (-3.3%). "
+                        summary += "Best Quarter: Q3 ($150M). Worst Quarter: Q1 ($120M)."
+                        structured_data = {
+                            "labels": ["Q1", "Q2", "Q3", "Q4"],
+                            "values": [120, 135, 150, 145],
+                            "units": ["M", "M", "M", "M"],
+                            "type": "revenue",
+                            "best_quarter": "Q3",
+                            "worst_quarter": "Q1",
+                            "yoy_growth": [None, 12.5, 11.1, -3.3]
+                        }
             else:
                 # Simple 2-quarter analysis (default)
-                summary = "ANALYSIS: Q1 Revenue = $2.3M, Q2 = $2.8M (+21.7%)."
-                structured_data = {
-                    "labels": ["Q1", "Q2"],
-                    "values": [2.3, 2.8],
-                    "units": ["M", "M"],
-                    "type": "revenue",
-                    "growth_percentage": 21.7
-                }
+                if use_excel and "Quarterly Revenue" in excel_data:
+                    df_quarters = excel_data["Quarterly Revenue"]
+                    q1_rev = df_quarters.loc[df_quarters["Quarter"] == "Q1", "Revenue (M)"].values[0]
+                    q2_rev = df_quarters.loc[df_quarters["Quarter"] == "Q2", "Revenue (M)"].values[0]
+                    growth = ((q2_rev - q1_rev) / q1_rev) * 100
+                    summary = f"ANALYSIS: Q1 Revenue = ${q1_rev}M, Q2 = ${q2_rev}M (+{growth:.1f}%)."
+                    structured_data = {
+                        "labels": ["Q1", "Q2"],
+                        "values": [float(q1_rev), float(q2_rev)],
+                        "units": ["M", "M"],
+                        "type": "revenue",
+                        "growth_percentage": round(growth, 1)
+                    }
+                else:
+                    summary = "ANALYSIS: Q1 Revenue = $2.3M, Q2 = $2.8M (+21.7%)."
+                    structured_data = {
+                        "labels": ["Q1", "Q2"],
+                        "values": [2.3, 2.8],
+                        "units": ["M", "M"],
+                        "type": "revenue",
+                        "growth_percentage": 21.7
+                    }
             return f"{summary} | DATA: {json.dumps(structured_data)}"
         
         if "sales" in code_lower:
@@ -168,14 +293,32 @@ def execute_python_analysis(code: str, user_query: str = "") -> str:
                     "is_negative": True
                 }
             else:
-                summary = "ANALYSIS: Total Sales = $5.1M, Growth Rate = 18.3% YoY."
-                structured_data = {
-                    "labels": ["Total Sales"],
-                    "values": [5.1],
-                    "units": ["M"],
-                    "type": "sales",
-                    "growth_percentage": 18.3
-                }
+                if use_excel and "Monthly Sales" in excel_data:
+                    # Use real data from Excel
+                    df_sales = excel_data["Monthly Sales"]
+                    total_sales = df_sales["Sales (M)"].sum()
+                    # Calculate YoY growth from first and last month
+                    first_month = df_sales.iloc[0]["Sales (M)"]
+                    last_month = df_sales.iloc[-1]["Sales (M)"]
+                    growth_rate = ((last_month - first_month) / first_month) * 100 if first_month > 0 else 0
+                    
+                    summary = f"ANALYSIS: Total Sales = ${total_sales:.1f}M, Growth Rate = {growth_rate:.1f}% YoY."
+                    structured_data = {
+                        "labels": ["Total Sales"],
+                        "values": [round(total_sales, 1)],
+                        "units": ["M"],
+                        "type": "sales",
+                        "growth_percentage": round(growth_rate, 1)
+                    }
+                else:
+                    summary = "ANALYSIS: Total Sales = $5.1M, Growth Rate = 18.3% YoY."
+                    structured_data = {
+                        "labels": ["Total Sales"],
+                        "values": [5.1],
+                        "units": ["M"],
+                        "type": "sales",
+                        "growth_percentage": 18.3
+                    }
             return f"{summary} | DATA: {json.dumps(structured_data)}"
         
         # Handle churn specifically
@@ -196,34 +339,72 @@ def execute_python_analysis(code: str, user_query: str = "") -> str:
             # Check if asking how to increase ROI
             is_increase_query = "increase" in query_lower or "improve" in query_lower or "boost" in query_lower or "enhance" in query_lower
             
-            if is_increase_query:
-                # Provide current ROI metrics and areas for improvement
-                summary = "ANALYSIS: Current ROI Analysis - Overall ROI: 18.5%, " 
-                summary += "Marketing ROI: 22.3% (highest), Product Development ROI: 15.2%, " 
-                summary += "Operations ROI: 12.8% (lowest). Key Insight: Marketing shows strongest returns. "
-                summary += "To increase ROI: 1) Scale high-performing marketing channels, 2) Optimize operations costs, "
-                summary += "3) Focus product development on high-margin offerings."
-                structured_data = {
-                    "labels": ["Overall ROI", "Marketing ROI", "Product Dev ROI", "Operations ROI"],
-                    "values": [18.5, 22.3, 15.2, 12.8],
-                    "units": ["%", "%", "%", "%"],
-                    "type": "roi",
-                    "highest": "Marketing ROI",
-                    "lowest": "Operations ROI",
-                    "recommendation": "Scale marketing, optimize operations"
-                }
+            if use_excel and "ROI Analysis" in excel_data:
+                # Use real data from Excel
+                df_roi = excel_data["ROI Analysis"]
+                overall_roi = df_roi.loc[df_roi["Department"] == "Overall", "ROI (%)"].values[0]
+                marketing_roi = df_roi.loc[df_roi["Department"] == "Marketing", "ROI (%)"].values[0]
+                product_roi = df_roi.loc[df_roi["Department"] == "Product Development", "ROI (%)"].values[0]
+                operations_roi = df_roi.loc[df_roi["Department"] == "Operations", "ROI (%)"].values[0]
+                
+                highest_dept = df_roi.loc[df_roi["ROI (%)"].idxmax(), "Department"]
+                lowest_dept = df_roi.loc[df_roi["ROI (%)"].idxmin(), "Department"]
+                avg_roi = df_roi["ROI (%)"].mean()
+                
+                if is_increase_query:
+                    summary = f"ANALYSIS: Current ROI Analysis - Overall ROI: {overall_roi}%, " 
+                    summary += f"Marketing ROI: {marketing_roi}% (highest), Product Development ROI: {product_roi}%, " 
+                    summary += f"Operations ROI: {operations_roi}% (lowest). Key Insight: {highest_dept} shows strongest returns. " 
+                    summary += "To increase ROI: 1) Scale high-performing marketing channels, 2) Optimize operations costs, " 
+                    summary += "3) Focus product development on high-margin offerings."
+                    structured_data = {
+                        "labels": ["Overall ROI", "Marketing ROI", "Product Dev ROI", "Operations ROI"],
+                        "values": [float(overall_roi), float(marketing_roi), float(product_roi), float(operations_roi)],
+                        "units": ["%", "%", "%", "%"],
+                        "type": "roi",
+                        "highest": f"{highest_dept} ROI",
+                        "lowest": f"{lowest_dept} ROI",
+                        "recommendation": "Scale marketing, optimize operations"
+                    }
+                else:
+                    summary = f"ANALYSIS: ROI Metrics - Overall ROI: {overall_roi}%, " 
+                    summary += f"Marketing ROI: {marketing_roi}%, Product Development ROI: {product_roi}%, Operations ROI: {operations_roi}%. " 
+                    summary += f"Average ROI across all channels: {avg_roi:.1f}%."
+                    structured_data = {
+                        "labels": ["Overall ROI", "Marketing ROI", "Product Dev ROI", "Operations ROI"],
+                        "values": [float(overall_roi), float(marketing_roi), float(product_roi), float(operations_roi)],
+                        "units": ["%", "%", "%", "%"],
+                        "type": "roi",
+                        "average_roi": round(avg_roi, 1)
+                    }
             else:
-                # General ROI query
-                summary = "ANALYSIS: ROI Metrics - Overall ROI: 18.5%, " 
-                summary += "Marketing ROI: 22.3%, Product Development ROI: 15.2%, Operations ROI: 12.8%. "
-                summary += "Average ROI across all channels: 17.2%."
-                structured_data = {
-                    "labels": ["Overall ROI", "Marketing ROI", "Product Dev ROI", "Operations ROI"],
-                    "values": [18.5, 22.3, 15.2, 12.8],
-                    "units": ["%", "%", "%", "%"],
-                    "type": "roi",
-                    "average_roi": 17.2
-                }
+                # Fallback to mock data
+                if is_increase_query:
+                    summary = "ANALYSIS: Current ROI Analysis - Overall ROI: 18.5%, " 
+                    summary += "Marketing ROI: 22.3% (highest), Product Development ROI: 15.2%, " 
+                    summary += "Operations ROI: 12.8% (lowest). Key Insight: Marketing shows strongest returns. " 
+                    summary += "To increase ROI: 1) Scale high-performing marketing channels, 2) Optimize operations costs, " 
+                    summary += "3) Focus product development on high-margin offerings."
+                    structured_data = {
+                        "labels": ["Overall ROI", "Marketing ROI", "Product Dev ROI", "Operations ROI"],
+                        "values": [18.5, 22.3, 15.2, 12.8],
+                        "units": ["%", "%", "%", "%"],
+                        "type": "roi",
+                        "highest": "Marketing ROI",
+                        "lowest": "Operations ROI",
+                        "recommendation": "Scale marketing, optimize operations"
+                    }
+                else:
+                    summary = "ANALYSIS: ROI Metrics - Overall ROI: 18.5%, " 
+                    summary += "Marketing ROI: 22.3%, Product Development ROI: 15.2%, Operations ROI: 12.8%. " 
+                    summary += "Average ROI across all channels: 17.2%."
+                    structured_data = {
+                        "labels": ["Overall ROI", "Marketing ROI", "Product Dev ROI", "Operations ROI"],
+                        "values": [18.5, 22.3, 15.2, 12.8],
+                        "units": ["%", "%", "%", "%"],
+                        "type": "roi",
+                        "average_roi": 17.2
+                    }
             return f"{summary} | DATA: {json.dumps(structured_data)}"
         
         # Handle ambiguous/vague queries (e.g., "What's our performance like?")
@@ -232,18 +413,54 @@ def execute_python_analysis(code: str, user_query: str = "") -> str:
         
         if is_vague:
             # Provide a comprehensive performance overview for vague queries
-            summary = "ANALYSIS: Overall Performance Overview - Revenue: $5.1M (18.3% YoY growth), "
-            summary += "Profit Margin: 24.5% (Top Region: North America at 32.1%), "
-            summary += "Customer Metrics: Stable. Key Insight: Strong revenue growth with healthy margins. "
-            summary += "Note: For more specific analysis, please specify metrics of interest (e.g., revenue trends, profit margins, customer churn)."
-            structured_data = {
-                "labels": ["Revenue", "Profit Margin", "Top Region Margin"],
-                "values": [5.1, 24.5, 32.1],
-                "units": ["M", "%", "%"],
-                "type": "performance_overview",
-                "growth_percentage": 18.3,
-                "note": "General performance overview - specify metrics for detailed analysis"
-            }
+            if use_excel:
+                # Aggregate data from multiple sheets
+                total_revenue = 0
+                avg_margin = 0
+                top_region_margin = 0
+                growth_rate = 0
+                
+                if "Quarterly Revenue" in excel_data:
+                    df_q = excel_data["Quarterly Revenue"]
+                    total_revenue = df_q["Revenue (M)"].sum()
+                    avg_margin = df_q["Profit Margin (%)"].mean()
+                
+                if "Regional Performance" in excel_data:
+                    df_reg = excel_data["Regional Performance"]
+                    top_region_row = df_reg.loc[df_reg["Profit Margin (%)"].idxmax()]
+                    top_region_margin = top_region_row["Profit Margin (%)"]
+                
+                if "Monthly Sales" in excel_data:
+                    df_sales = excel_data["Monthly Sales"]
+                    first_month = df_sales.iloc[0]["Sales (M)"]
+                    last_month = df_sales.iloc[-1]["Sales (M)"]
+                    growth_rate = ((last_month - first_month) / first_month) * 100 if first_month > 0 else 0
+                
+                summary = f"ANALYSIS: Overall Performance Overview - Revenue: ${total_revenue:.1f}M ({growth_rate:.1f}% YoY growth), " 
+                summary += f"Profit Margin: {avg_margin:.1f}% (Top Region: {top_region_row['Region'] if 'top_region_row' in locals() else 'North America'} at {top_region_margin:.1f}%), " 
+                summary += "Customer Metrics: Stable. Key Insight: Strong revenue growth with healthy margins. " 
+                summary += "Note: For more specific analysis, please specify metrics of interest (e.g., revenue trends, profit margins, customer churn)."
+                structured_data = {
+                    "labels": ["Revenue", "Profit Margin", "Top Region Margin"],
+                    "values": [round(total_revenue, 1), round(avg_margin, 1), round(top_region_margin, 1)],
+                    "units": ["M", "%", "%"],
+                    "type": "performance_overview",
+                    "growth_percentage": round(growth_rate, 1),
+                    "note": "General performance overview - specify metrics for detailed analysis"
+                }
+            else:
+                summary = "ANALYSIS: Overall Performance Overview - Revenue: $5.1M (18.3% YoY growth), " 
+                summary += "Profit Margin: 24.5% (Top Region: North America at 32.1%), " 
+                summary += "Customer Metrics: Stable. Key Insight: Strong revenue growth with healthy margins. " 
+                summary += "Note: For more specific analysis, please specify metrics of interest (e.g., revenue trends, profit margins, customer churn)."
+                structured_data = {
+                    "labels": ["Revenue", "Profit Margin", "Top Region Margin"],
+                    "values": [5.1, 24.5, 32.1],
+                    "units": ["M", "%", "%"],
+                    "type": "performance_overview",
+                    "growth_percentage": 18.3,
+                    "note": "General performance overview - specify metrics for detailed analysis"
+                }
             return f"{summary} | DATA: {json.dumps(structured_data)}"
         
         # Default response for valid but unrecognized patterns

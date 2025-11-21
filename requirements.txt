@@ -28,3 +28,7 @@ pytest-mock>=3.11.0
 # typing-extensions (for Annotated)
 typing-extensions>=4.8.0
 
+# Data processing (for Excel file support)
+pandas>=2.0.0
+openpyxl>=3.1.0
+
