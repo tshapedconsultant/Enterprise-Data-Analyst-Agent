@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Analyst Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1 class="title">Data Analyst</h1>
+            <p class="subtitle">Ask anything about your data</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Input Section -->
+            <div class="input-section">
+                <div class="input-wrapper">
+                    <textarea 
+                        id="queryInput" 
+                        class="query-input" 
+                        placeholder="What would you like to analyze? For example: 'Analyze revenue trends for Q1 and Q2'"
+                        rows="3"
+                    ></textarea>
+                </div>
+                
+                <button id="analyzeBtn" class="analyze-button">
+                    <span class="button-text">Analyze</span>
+                    <span class="button-loader" style="display: none;">
+                        <span class="spinner"></span>
+                        Analyzing...
+                    </span>
+                </button>
+            </div>
+
+            <!-- Results Section -->
+            <div id="resultsSection" class="results-section" style="display: none;">
+                <div class="results-header">
+                    <h2>Analysis Results</h2>
+                    <button id="clearBtn" class="clear-button">Clear</button>
+                </div>
+                <div id="resultsContent" class="results-content"></div>
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="empty-state">
+                <div class="empty-icon">📊</div>
+                <p class="empty-text">Enter a question above to get started</p>
+                <div class="example-queries">
+                    <p class="examples-title">Try asking:</p>
+                    <div class="example-chips">
+                        <button class="example-chip" data-query="Analyze revenue trends for Q1 and Q2">Revenue trends</button>
+                        <button class="example-chip" data-query="What are the profit margins?">Profit margins</button>
+                        <button class="example-chip" data-query="What are the sales trends?">Sales trends</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Powered by Enterprise Data Analyst Agent</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
