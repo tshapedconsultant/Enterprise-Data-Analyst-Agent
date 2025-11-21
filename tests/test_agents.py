@@ -8,7 +8,7 @@ functionality and behavior.
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 from langchain_core.messages import AIMessage
-from agents.worker import WorkerAgent, DataAnalystAgent, VisualizerAgent
+from agents.worker import WorkerAgent, DataAnalystAgent, BusinessStrategistAgent
 from agents.supervisor import SupervisorAgent, RouteResponse
 from core.state import create_initial_state
 from config import VALID_AGENTS
@@ -76,24 +76,23 @@ class TestDataAnalystAgent:
         assert any("analysis" in name.lower() for name in tool_names)
 
 
-class TestVisualizerAgent:
-    """Test suite for VisualizerAgent."""
+class TestBusinessStrategistAgent:
+    """Test suite for BusinessStrategistAgent."""
     
-    def test_visualizer_agent_initialization(self, mock_llm):
-        """Test that VisualizerAgent initializes correctly."""
-        agent = VisualizerAgent(llm=mock_llm)
+    def test_strategist_agent_initialization(self, mock_llm):
+        """Test that BusinessStrategistAgent initializes correctly."""
+        agent = BusinessStrategistAgent(llm=mock_llm)
         
-        assert agent.name == "Visualizer"
-        assert "visualization" in agent.system_prompt.lower() or "chart" in agent.system_prompt.lower()
+        assert agent.name == "Business_Strategist"
+        assert "strategist" in agent.system_prompt.lower() or "strategy" in agent.system_prompt.lower()
     
-    def test_visualizer_has_tools(self, mock_llm):
-        """Test that VisualizerAgent has visualization tools."""
-        agent = VisualizerAgent(llm=mock_llm)
+    def test_strategist_has_structured_output(self, mock_llm):
+        """Test that BusinessStrategistAgent uses structured output."""
+        agent = BusinessStrategistAgent(llm=mock_llm)
         
-        assert len(agent.tools) > 0
-        # Should have generate_chart_config tool
-        tool_names = [tool.name for tool in agent.tools]
-        assert any("chart" in name.lower() or "config" in name.lower() for name in tool_names)
+        # Should have strategy_schema for structured output
+        assert hasattr(agent, 'strategy_schema')
+        assert agent.chain is not None
 
 
 class TestSupervisorAgent:
@@ -124,7 +123,11 @@ class TestSupervisorAgent:
         mock_decision = Mock(spec=RouteResponse)
         mock_decision.next = "Data_Analyst"
         mock_decision.reasoning = "Need to analyze data"
-        supervisor.chain.invoke = Mock(return_value=mock_decision)
+        
+        # Replace chain with a MagicMock that has an invoke method
+        mock_chain = MagicMock()
+        mock_chain.invoke = Mock(return_value=mock_decision)
+        supervisor.chain = mock_chain
         
         next_agent, reasoning = supervisor.decide(sample_state)
         
@@ -139,7 +142,11 @@ class TestSupervisorAgent:
         mock_decision = Mock(spec=RouteResponse)
         mock_decision.next = "InvalidAgent"
         mock_decision.reasoning = "Invalid reasoning"
-        supervisor.chain.invoke = Mock(return_value=mock_decision)
+        
+        # Replace chain with a MagicMock that has an invoke method
+        mock_chain = MagicMock()
+        mock_chain.invoke = Mock(return_value=mock_decision)
+        supervisor.chain = mock_chain
         
         next_agent, reasoning = supervisor.decide(sample_state)
         
@@ -150,8 +157,10 @@ class TestSupervisorAgent:
         """Test that supervisor handles exceptions gracefully."""
         supervisor = SupervisorAgent(llm=mock_llm)
         
-        # Mock the chain to raise an exception
-        supervisor.chain.invoke = Mock(side_effect=Exception("Test error"))
+        # Replace chain with a MagicMock that raises an exception
+        mock_chain = MagicMock()
+        mock_chain.invoke = Mock(side_effect=Exception("Test error"))
+        supervisor.chain = mock_chain
         
         next_agent, reasoning = supervisor.decide(sample_state)
         

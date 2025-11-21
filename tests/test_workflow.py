@@ -28,7 +28,7 @@ class TestEnterpriseDataTeam:
         assert team.llm == mock_llm
         assert team.supervisor is not None
         assert team.analyst_agent is not None
-        assert team.visualizer_agent is not None
+        assert team.strategist_agent is not None
     
     def test_team_creates_workflow_graph(self, mock_llm):
         """Test that team creates a workflow graph."""
@@ -36,9 +36,9 @@ class TestEnterpriseDataTeam:
         
         assert team.workflow is not None
     
-    def test_team_uses_default_config(self):
+    def test_team_uses_default_config(self, mock_llm):
         """Test that team uses default configuration when not specified."""
-        team = EnterpriseDataTeam()
+        team = EnterpriseDataTeam(llm=mock_llm)
         
         assert team.max_iterations > 0
         assert team.message_window > 0

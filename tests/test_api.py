@@ -5,6 +5,7 @@ This module tests the API routes and endpoints to ensure
 they work correctly and handle errors properly.
 """
 
+import os
 import pytest
 from fastapi.testclient import TestClient
 from api import app
@@ -18,6 +19,8 @@ def client():
     Returns:
         TestClient instance
     """
+    # Set a dummy API key for testing (tests that actually call OpenAI will need real key)
+    os.environ.setdefault("OPENAI_API_KEY", "test-key-for-testing")
     return TestClient(app)
 
 
@@ -64,12 +67,12 @@ class TestRootEndpoint:
         assert response.status_code == 200
     
     def test_root_endpoint_has_api_info(self, client):
-        """Test that root endpoint includes API information."""
+        """Test that root endpoint returns HTML interface."""
         response = client.get("/")
-        data = response.json()
-        assert "name" in data
-        assert "version" in data
-        assert "endpoints" in data
+        # Root endpoint now serves the web interface (HTML)
+        assert response.status_code == 200
+        assert "text/html" in response.headers.get("content-type", "")
+        assert b"Enterprise Data Analyst Agent" in response.content
 
 
 class TestRunEndpoint:
@@ -79,7 +82,7 @@ class TestRunEndpoint:
         """Test that /run endpoint accepts POST requests."""
         response = client.post(
             "/run",
-            json={"query": "Test query"}
+            json={"query": "Analyze revenue trends"}
         )
         # Should return 200 or streaming response
         assert response.status_code in [200, 200]
@@ -106,7 +109,7 @@ class TestRunEndpoint:
         response = client.post(
             "/run",
             json={
-                "query": "Test query",
+                "query": "What are the profit margins?",
                 "max_iterations": 5,
                 "message_window": 10
             }

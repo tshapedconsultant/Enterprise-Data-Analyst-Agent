@@ -97,15 +97,15 @@ class TestMergePartialState:
         """Test that multiple fields can be merged at once."""
         partial = {
             "iteration_count": 3,
-            "next_agent": "Visualizer",
-            "reasoning": "Need to visualize data"
+            "next_agent": "Business_Strategist",
+            "reasoning": "Need to generate strategic recommendations"
         }
         
         updated = merge_partial_state(sample_state, partial)
         
         assert updated["iteration_count"] == 3
-        assert updated["next_agent"] == "Visualizer"
-        assert updated["reasoning"] == "Need to visualize data"
+        assert updated["next_agent"] == "Business_Strategist"
+        assert updated["reasoning"] == "Need to generate strategic recommendations"
     
     def test_preserves_unchanged_fields(self, sample_state):
         """Test that unchanged fields are preserved."""
